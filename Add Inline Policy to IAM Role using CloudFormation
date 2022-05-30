@@ -1,0 +1,14 @@
+Resources:
+  MyTestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      .................................
+      .................................
+      Policies:
+        - PolicyName: EmbeddedInlinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 'cloudformation:*'
+                Resource: '*'

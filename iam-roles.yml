@@ -1,0 +1,560 @@
+Resources:
+
+  # --- Logging --- #
+
+  CloudwatchLogsToFirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", CloudwatchLogsToFirehoseRole]]
+      Description: This is used to send Cloudwatch Logs to S3
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: logs.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: Permissions-Policy-For-Firehose
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: Allow
+            Action:
+            - firehose:*
+            Resource:
+            - !GetAtt [FirehoseToS3DeliveryStream, "Arn"]
+
+  FirehoseToS3Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", FirehoseToS3Role]]
+      Description: This is used to send Cloudwatch Logs to S3
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: firehose.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              sts:ExternalId: '#{AWS::AccountId}'
+      Policies:
+      - PolicyName: Permissions-Policy-For-Firehose
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:AbortMultipartUpload
+            - s3:GetBucketLocation
+            - s3:GetObject
+            - s3:ListBucket
+            - s3:ListBucketMultipartUploads
+            - s3:PutObject
+            Resource:
+            - !Join ["", ["arn:aws:s3:::", !ImportValue coreLoggingBucketId]]
+            - !Join ["", ["arn:aws:s3:::", !ImportValue coreLoggingBucketId, "/*"]]
+
+  # --- ECS  --- #
+
+  BackendTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", BackendTaskRole]]
+      Description: This is used by the container of the backend task
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+      - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+      Path: "/"
+      Policies:
+      - PolicyName: CloudWatch
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:DescribeLogGroups
+            - logs:DescribeLogStreams
+            - logs:PutLogEvents
+            - logs:GetLogEvents
+            - logs:FilterLogEvents
+            Resource: "*"
+      - PolicyName: AppStreamStreamingURL
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: Allow
+            Action:
+            - appstream:CreateStreamingURL
+            Resource: "*"
+      - PolicyName: AccessToKmsInServiceAccount
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: Allow
+            Action:
+            - kms:Encrypt
+            - kms:Decrypt
+            - kms:ReEncrypt*
+            - kms:GenerateDataKey*
+            - kms:DescribeKey
+            Resource:
+            - arn:aws:kms:*:674435038084:alias/*
+            - arn:aws:kms:*:674435038084:key/*
+
+  BackendTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", BackendTaskExecutionRole]]
+      Description: This is used by the fargate agents of the backend task
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # --- Lambdas --- #
+
+  BaseLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", BaseLambdaExecutionRole]]
+      Description: Role used by lambdas in repo base
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: PassRole-CloudwatchLogsToFirehoseRole
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - iam:GetRole
+            - iam:PassRole
+            Resource: !GetAtt [CloudwatchLogsToFirehoseRole, "Arn"]
+      - PolicyName: Write-access-to-SSM-Parameter-settlement-base-auth
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - ssm:PutParameter
+            Resource: arn:aws:ssm:#{AWS::Region}:#{AWS::AccountId}:parameter/settlement/base/auth/*
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonKinesisFirehoseReadOnlyAccess
+      - arn:aws:iam::aws:policy/AmazonRDSFullAccess
+      - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+      - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Path: "/"
+
+  SdkLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", SdkLambdaExecutionRole]]
+      Description: Role used by all lambdas in repo sdk
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonAppStreamReadOnlyAccess
+      - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Path: "/"
+
+  WebLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", WebLambdaExecutionRole]]
+      Description: Role used by all lambdas in repo web
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: S3Access
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - 's3:Get*'
+            - 's3:List*'
+            - 's3:DeleteObject'
+            - 's3:PutObject'
+            Resource:
+            - '*'
+      - PolicyName: AccessToKmsInServiceAccount
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: Allow
+            Action:
+            - kms:Encrypt
+            - kms:Decrypt
+            - kms:ReEncrypt*
+            - kms:GenerateDataKey*
+            - kms:DescribeKey
+            Resource:
+            - arn:aws:kms:*:674435038084:alias/*
+            - arn:aws:kms:*:674435038084:key/*
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+      - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Path: "/"
+
+  LambdaEdgeExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", LambdaEdgeExecutionRole]]
+      Description: 'Role used by all lambdas@edge'
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+            - edgelambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # --- RDS  --- #
+
+  EnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", EnhancedMonitoringRole]]
+      Description: This is used by RDS to provide enhandced monitoring
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: monitoring.rds.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+
+  RdsDumpToS3Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", RdsDumpToS3Role]]
+      Description: This is used by RDS to access objects on S3 RdsDumpBucket
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: rds.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: RdsDump-To-S3-Policy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:ListBucket
+            Resource:
+            - !GetAtt [RdsDumpBucket, "Arn"]
+            - !Join [ "", [!GetAtt [RdsDumpBucket, "Arn"], "/*"]]
+
+  # --- AppStream internal (!!!) --- #
+
+  SettlementAmazonAppStreamServiceAccess:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: '/service-role/'
+      RoleName: AmazonAppStreamServiceAccess
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: appstream.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonAppStreamServiceAccess
+
+  SettlementApplicationAutoScalingForAmazonAppStreamAccess:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: '/service-role/'
+      RoleName: ApplicationAutoScalingForAmazonAppStreamAccess
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: application-autoscaling.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/ApplicationAutoScalingForAmazonAppStreamAccess
+
+  SettlementAWSServiceRoleForAppStreamApplicationAutoScaling:
+    Type: AWS::IAM::ServiceLinkedRole
+    Properties:
+      AWSServiceName: appstream.application-autoscaling.amazonaws.com
+
+  # --- Api Gateway --- #
+  SettlementApiGatewayPushToCloudWatchRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              - apigateway.amazonaws.com
+          Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  # --- Role for API Gateway for Endur and DVM --- #
+  S3EndurAndDvmAccessForDataExchangeApiGw:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", endur-dvm, access, dataexchange-api]]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: apigateway.amazonaws.com
+          Action: sts:AssumeRole
+      Description: Access to S3 data bucket for endur data
+      ManagedPolicyArns:
+      - !Ref S3EndurAccessManagedPolicy
+      - !Ref S3DvmAccessManagedPolicy
+      - !Ref S3TempDataKmsKeyManagedPolicy
+
+  # --- Endur ManagedPolicy --- #
+  S3EndurAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Allows put to the endur path of the s3 data bucket.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:Put*
+          Resource: "#{TempDataBucket.Arn}/endur/*"
+
+  # --- DVM ManagedPolicy --- #
+  S3DvmAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Allows put to the dvm path of the s3 data bucket.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:Put*
+          Resource: "#{TempDataBucket.Arn}/dvm/*"
+
+  # --- Role for API Gateway for EV Data --- #
+  S3EVAccessForDataExchangeApiGw:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", ev, access, dataexchange-api]]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: apigateway.amazonaws.com
+          Action: sts:AssumeRole
+      Description: Access to S3 data bucket for ev data
+      ManagedPolicyArns:
+      - !Ref S3EvStromAccessManagedPolicy
+      - !Ref S3EvGasAccessManagedPolicy
+      - !Ref S3TempDataKmsKeyManagedPolicy
+
+  # --- EvStrom ManagedPolicy --- #
+  S3EvStromAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Allows put to the ev-strom path of the s3 data bucket.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:Put*
+          Resource: "#{TempDataBucket.Arn}/evstrom/*"
+
+  # --- EvGas ManagedPolicy --- #
+  S3EvGasAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Allows put to the ev-gas path of the s3 data bucket.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:Put*
+          Resource: "#{TempDataBucket.Arn}/evgas/*"
+
+  # --- Role for API Gateway for read purposes --- #
+  S3ReadOnlyAccessForDataExchangeApiGw:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", read-only, access, dataexchange-api]]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: apigateway.amazonaws.com
+          Action: sts:AssumeRole
+      Description: Access to S3 data bucket for sdk data
+      ManagedPolicyArns:
+      - !Ref S3ReadOnlyAccessManagedPolicy
+      - !Ref S3TempDataKmsKeyManagedPolicy
+
+  # --- S3 ReadOnly ManagedPolicy --- #
+  S3ReadOnlyAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Allows read access the s3 data bucket.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:GetObject
+          - s3:ListBucket
+          Resource:
+          - "#{TempDataBucket.Arn}/*"
+          - "#{TempDataBucket.Arn}"
+
+  # --- S3 temp-data bucket key policy --- #
+  S3TempDataKmsKeyManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Allows use of the KmsKey of the s3 temp data bucket.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - kms:Encrypt
+          - kms:Decrypt
+          - kms:ReEncrypt*
+          - kms:GenerateDataKey*
+          - kms:DescribeKey
+          Resource: ${self:custom.stageCfg.TempDataBucketKey}
+
+  # --- S3 Replication Role and Policy --- #
+  TempDataBucketReplicationRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join ['-', [Settlement, "${self:custom.Stage}", TempDataBucketReplicationRole]]
+      Description: Used to replicate objects from S3 TempDataBucket
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - 'sts:AssumeRole'
+          Effect: Allow
+          Principal:
+            Service:
+            - s3.amazonaws.com
+            - s3.eu-central-1.amazonaws.com
+
+  TempDataBucketReplicationPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: S3-TempDataBucket-Replication-Policy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Action:
+          - 's3:GetReplicationConfiguration'
+          - 's3:ListBucket'
+          Effect: Allow
+          Resource:
+          - !Join ['', ['arn:aws:s3:::', !Ref TempDataBucket]]
+        - Action:
+          - s3:GetObjectVersionAcl
+          - s3:GetObjectVersionForReplication
+          Effect: Allow
+          Resource:
+          - !Join ['', ['arn:aws:s3:::', !Ref TempDataBucket, "/*"]]
+        - Action:
+          - s3:ReplicateObject
+          - s3:ReplicateDelete
+          - s3:ObjectOwnerOverrideToBucketOwner
+          Effect: Allow
+          Resource:
+          # any replication destination buckets
+          - arn:aws:s3:::base-dev-temp-data*
+          - arn:aws:s3:::base-test-temp-data*
+      Roles:
+      - !Ref TempDataBucketReplicationRole
+
+  SdkServerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SdkServerRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+
+  SsmServiceLinkedRole:
+    Type: AWS::IAM::ServiceLinkedRole
+    Properties:
+      AWSServiceName: ssm.amazonaws.com
+
+  # --- DataBackbone integration role --- #
+  DataBackboneIntegrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: DataBackboneIntegrationRole
+      Description: Role used to connect to DataBackbone SNS topics
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sqs.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSNSFullAccess
+        - arn:aws:iam::aws:policy/AmazonSQSFullAccess

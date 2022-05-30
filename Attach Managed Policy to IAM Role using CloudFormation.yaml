@@ -1,0 +1,9 @@
+Resources:
+  MyTestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      .................................
+      .................................
+
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/AmazonS3FullAcces
